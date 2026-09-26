@@ -9,6 +9,13 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev --no-audit --no-fund
 
+# Belt and braces: the base image ships browsers for its own Playwright
+# version, but the npm package MUST find its exact browser build
+# (every Playwright minor version needs a different Chromium revision —
+# a ^-range drift is enough to break launch with "Executable doesn't exist").
+# Installing here guarantees the image always matches package.json.
+RUN npx playwright install chromium
+
 COPY src ./src
 
 ENV NODE_ENV=production
