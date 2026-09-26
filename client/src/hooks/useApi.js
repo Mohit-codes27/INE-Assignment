@@ -1,6 +1,10 @@
 import { useEffect, useState, useCallback } from 'react';
 import * as api from '../api/client';
 
+// Backend lists must always be arrays — normalize so a malformed payload can
+// never crash a `.length`/`.map` in a component; errors surface as messages.
+const asArray = (v) => (Array.isArray(v) ? v : []);
+
 export function useTracked() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -9,7 +13,9 @@ export function useTracked() {
     setLoading(true);
     setError(null);
     try {
-      setData(await api.listTracked());
+      const res = await api.listTracked();
+      if (!Array.isArray(res)) throw new Error('Tracked list returned an unexpected response.');
+      setData(res);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -30,9 +36,12 @@ export function useSearch(query) {
     const t = setTimeout(async () => { // debounce
       try {
         setError(null);
-        setData(await api.searchProducts(query.trim()));
+        const res = await api.searchProducts(query.trim());
+        if (!Array.isArray(res)) throw new Error('Search returned an unexpected response.');
+        setData(res);
       } catch (e) {
         setError(e.message);
+        setData([]);
       } finally {
         setLoading(false);
       }
@@ -56,8 +65,8 @@ export function useDetails(trackedId) {
     try {
       const [t, h, l] = await Promise.all([api.getTracked(trackedId), api.getHistory(trackedId), api.getLogs(trackedId)]);
       setTracked(t);
-      setHistory(h);
-      setLogs(l);
+      setHistory(asArray(h));
+      setLogs(asArray(l));
     } catch (e) {
       setError(e.message);
     } finally {

@@ -1,12 +1,21 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  baseURL: import.meta.env.API_BASE_URL || '/api',
   timeout: 120000, // manual scrapes run a real browser; allow time
 });
 
 api.interceptors.response.use(
-  (r) => r.data, // unwrap { success, data }
+  (r) => {
+    // Misconfiguration guard: if VITE_API_BASE_URL is unset/wrong on Vercel,
+    // /api/* hits the static frontend itself, which serves index.html (a
+    // string). Without this check, unwrapping `.data` yields `undefined` and
+    // the UI crashes on `.length`. Fail here with the actual cause instead.
+    if (typeof r.data === 'string') {
+      throw new Error('Backend did not return JSON (got HTML). Set VITE_API_BASE_URL to the Render API URL (…/api) and redeploy the frontend.');
+    }
+    return r.data; // unwrap { success, data }
+  },
   (err) => {
     const e = new Error(err?.response?.data?.error?.message || err.message || 'Request failed');
     e.code = err?.response?.data?.error?.code;
