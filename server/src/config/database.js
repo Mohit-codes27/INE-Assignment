@@ -183,6 +183,9 @@ function createMemoryDb() {
       const r = state.runs.find((x) => x.id === id);
       if (r) { r.completedAt = nowIso(); r.status = status; }
     },
+    async listRuns(limit = 20) {
+      return [...state.runs].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1)).slice(0, limit);
+    },
   };
 }
 
@@ -372,6 +375,10 @@ function createPgDb(pgPool) {
     },
     async finishRun(id, status) {
       await q('UPDATE scrape_runs SET completed_at=now(), status=$2 WHERE id=$1', [id, status]);
+    },
+    async listRuns(limit = 20) {
+      const r = await q('SELECT * FROM scrape_runs ORDER BY started_at DESC LIMIT $1', [limit]);
+      return r.rows;
     },
   };
 }

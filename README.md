@@ -103,7 +103,8 @@ Opens a visible browser: consent dialog → option chip → hover dwell → "Che
 | GET | `/api/tracked-products/:id/history?limit=` | successful history |
 | GET | `/api/tracked-products/:id/logs?limit=` | every attempt, newest first |
 | POST | `/api/tracked-products/:id/scrape` | manual scrape (same service) |
-| POST | `/api/cron/scrape` | `Bearer CRON_SECRET`, overlap-guarded |
+| POST | `/api/cron/scrape` | `Bearer CRON_SECRET`, overlap-guarded; acks immediately, scrapes in background (30s scheduler budget) |
+| GET | `/api/cron/runs?limit=` | recent run audit trail (same secret) |
 | GET | `/api/export/scrape-history.csv` | all attempts, ISO-8601 UTC |
 
 Errors: `{ success: false, error: { code, message } }` (no stack traces in prod).
