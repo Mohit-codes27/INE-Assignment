@@ -10,13 +10,13 @@ const { scrapeTrackedProduct } = require('../scraper/index');
 const { pool } = require('../utils/concurrency');
 const { env } = require('../config/env');
 
-async function runSingle(trackedId, db, { headed = false, io = {} } = {}) {
+async function runSingle(trackedId, db, { headed = false, io = {}, onProgress = null } = {}) {
   const tracked = await db.getTracked(trackedId);
   if (!tracked) throw Object.assign(new Error('Tracked product not found.'), { status: 404, code: 'TRACKED_NOT_FOUND' });
 
   const prevLatest = await db.latestHistory(trackedId).catch(() => null);
   const prevFp = await db.getStructureFingerprint(trackedId).catch(() => null);
-  const result = await scrapeTrackedProduct(tracked, { headed, db, io });
+  const result = await scrapeTrackedProduct(tracked, { headed, db, io, onProgress });
 
   const events = [];
   if (result.ok) {

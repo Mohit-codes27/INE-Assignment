@@ -7,6 +7,10 @@
 //   - retry-then-success yields 3 attempts + exactly 1 history row
 //   - STRUCTURE_CHANGED / PRICE_DROP events fire correctly
 
+// NEVER touch a real database from tests: clear DATABASE_URL before anything
+// requires the db layer (dotenv won't override an already-set variable).
+process.env.DATABASE_URL = '';
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { getDb } = require('../src/config/database');

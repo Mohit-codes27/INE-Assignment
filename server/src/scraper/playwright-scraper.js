@@ -34,14 +34,16 @@ async function dismissConsent(page, sel) {
   throw Object.assign(new Error('Consent dialog could not be dismissed.'), { code: 'CONSENT_BLOCKED' });
 }
 
-async function scrapeWithPlaywright({ storeProductId, optionLabel, sourceUrl, headed, timeoutMs, manifest }) {
+async function scrapeWithPlaywright({ storeProductId, optionLabel, sourceUrl, headed, timeoutMs, manifest, onProgress = null }) {
   const started = Date.now();
   const strategy = 'playwright';
+  const progress = typeof onProgress === 'function' ? onProgress : () => {};
   const sel = buildSelectors(manifest);
   const browser = await pw().chromium.launch({ headless: headed === true ? false : env.HEADLESS });
   try {
     const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
     page.setDefaultTimeout(timeoutMs || env.BROWSER_TIMEOUT_MS);
+    progress({ type: 'navigating', sourceUrl });
     try {
       await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: env.BROWSER_TIMEOUT_MS });
     } catch (e) {
@@ -52,6 +54,7 @@ async function scrapeWithPlaywright({ storeProductId, optionLabel, sourceUrl, he
     await page.waitForSelector(sel.productReady, { timeout: 15000 }).catch(() => {
       throw Object.assign(new Error('Product page never rendered (store flake).'), { code: 'STORE_FLAKY_DROP' });
     });
+    progress({ type: 'page-ready' });
 
     // 1. product identity from the rendered page
     const productName = (await page.locator(sel.summaryTitle).first().textContent().catch(() => '')).trim();
@@ -71,7 +74,10 @@ async function scrapeWithPlaywright({ storeProductId, optionLabel, sourceUrl, he
         }
       }
       if (!clicked) throw Object.assign(new Error(`Option "${optionLabel}" not found on page.`), { code: 'OPTION_NOT_FOUND' });
+      progress({ type: 'option-selected', label: clicked });
       await page.waitForTimeout(400);
+    } else {
+      progress({ type: 'option-skipped' });
     }
 
     // 3. hover the locked panel with a real mouse (>=8 moves over the panel)
@@ -89,6 +95,7 @@ async function scrapeWithPlaywright({ storeProductId, optionLabel, sourceUrl, he
     // 4. click unlock (selector first, button-text fallback); the page itself
     //    retries the quote request up to 6 times internally
     const checkBtn = page.locator(`${sel.unlockButton}, ${sel.panel} button:has-text("${sel.unlockButtonText}")`).first();
+    progress({ type: 'unlocking' });
     await checkBtn.click({ timeout: 8000 }).catch(() => {
       throw Object.assign(new Error('Price unlock button never became clickable.'), { code: 'EXTRACT_TIMEOUT' });
     });
@@ -100,6 +107,7 @@ async function scrapeWithPlaywright({ storeProductId, optionLabel, sourceUrl, he
       err.code = 'CHALLENGE_FAILED';
       throw err;
     });
+    progress({ type: 'unlocked' });
 
     // 5. extract the VISIBLE price. The store rotates layout: with priceCarrier
     //    "split" the price node holds one <span> per CHARACTER, so single-node
@@ -156,6 +164,7 @@ async function scrapeWithPlaywright({ storeProductId, optionLabel, sourceUrl, he
       e.code = stock.reason || 'STOCK_UNKNOWN';
       throw e;
     }
+    progress({ type: 'extracted', price: price.value, stock: stock.value });
 
     return {
       success: true,

@@ -21,8 +21,9 @@ function logLine(fields) {
   logger.info('[SCRAPE] ' + Object.entries(fields).map(([k, v]) => `${k}=${v}`).join(' '));
 }
 
-async function scrapeTrackedProduct(tracked, { headed = false, db = null, io = {} } = {}) {
+async function scrapeTrackedProduct(tracked, { headed = false, db = null, io = {}, onProgress = null } = {}) {
   const { fetchItemFn = fetchItem, fetchManifestFn = fetchManifest, scrapeFn = scrapeWithPlaywright } = io;
+  const progress = typeof onProgress === 'function' ? onProgress : () => {};
   const maxAttempts = env.MAX_SCRAPE_ATTEMPTS;
   const attempts = []; // returned so service can persist every attempt honestly
   const storeProductId = tracked.product.storeProductId;
@@ -66,13 +67,15 @@ async function scrapeTrackedProduct(tracked, { headed = false, db = null, io = {
     const startedAt = new Date().toISOString();
     const t0 = Date.now();
     logLine({ product: storeProductId, option: optionLabel, attempt: n, strategy: 'playwright', status: 'started' });
+    progress({ type: 'attempt-start', attempt: n, totalAttempts, strategy: 'playwright' });
     try {
-      const r = await scrapeFn({ storeProductId, optionLabel, sourceUrl, headed, manifest });
+      const r = await scrapeFn({ storeProductId, optionLabel, sourceUrl, headed, manifest, onProgress: progress });
       const v = validateScraped(r.data);
       if (!v.ok) throw Object.assign(new Error(v.message), { code: v.code });
       const attempt = { trackedProductId: tracked.id, attemptNumber: n, status: 'success', strategy: 'playwright', startedAt, completedAt: new Date().toISOString(), durationMs: Date.now() - t0, price: r.data.price, stock: r.data.stock, httpStatus: null, errorCode: null, errorMessage: null };
       attempts.push(attempt);
       logLine({ product: storeProductId, option: optionLabel, attempt: n, strategy: 'playwright', status: 'success', price: r.data.price, stock: r.data.stock, duration: `${attempt.durationMs}ms` });
+      progress({ type: 'attempt-success', attempt: n, price: r.data.price, stock: r.data.stock });
       return { ok: true, attempts, data: r.data, manifestFp };
     } catch (err) {
       const { code, message } = classifyBrowserError(err);
@@ -81,8 +84,14 @@ async function scrapeTrackedProduct(tracked, { headed = false, db = null, io = {
       const attempt = { trackedProductId: tracked.id, attemptNumber: n, status: done ? 'failed' : 'retried', strategy: 'playwright', startedAt, completedAt: new Date().toISOString(), durationMs: Date.now() - t0, price: null, stock: null, httpStatus: null, errorCode: code, errorMessage: message };
       attempts.push(attempt);
       logLine({ product: storeProductId, option: optionLabel, attempt: n, strategy: 'playwright', status: attempt.status, error: code, duration: `${attempt.durationMs}ms` });
-      if (!done) await sleep(backoffMs(n));
-      else break;
+      if (!done) {
+        const waitMs = backoffMs(n);
+        progress({ type: 'attempt-retry', attempt: n, code, message, waitMs });
+        await sleep(waitMs);
+      } else {
+        progress({ type: 'attempt-failed', attempt: n, code, message });
+        break;
+      }
     }
   }
   return { ok: false, attempts, errorCode: lastError.code, errorMessage: lastError.message, manifestFp };
