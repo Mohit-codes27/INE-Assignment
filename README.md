@@ -118,11 +118,17 @@ Errors: `{ success: false, error: { code, message } }` (no stack traces in prod)
 1. New project → copy connection string → set `DATABASE_URL`.
 2. Run `supabase/schema.sql` in SQL editor (or let server auto-create on first boot).
 
-### Render (backend)
-- Build: `npm install` (+ `npx playwright install chromium` if browser needed at runtime)
-- Start: `npm start` (root `server/`)
-- Env: `DATABASE_URL, STORE_BASE_URL, CRON_SECRET, FRONTEND_URL, HTTP_TIMEOUT_MS, BROWSER_TIMEOUT_MS, MAX_SCRAPE_ATTEMPTS, SCRAPE_CONCURRENCY`
-- Note: Playwright on Render free tier is heavy — if it doesn't fit, run price scrapes from a local/CI runner hitting the same code path, or upgrade Render. Metadata/search endpoints work without a browser.
+### Render (backend) — Docker runtime (recommended)
+- The repo ships `server/Dockerfile` based on Playwright's official image
+  (Node + Chromium + OS deps). Render's native Node runtime cannot apt-get
+  browser libraries, so without Docker every scrape fails fast with
+  `BROWSER_NOT_INSTALLED`.
+- Render dashboard → service → Settings → **Runtime: Docker**, Root Directory
+  `server`. No build/start commands needed (Dockerfile's `npm install` + CMD).
+- Env: `DATABASE_URL, STORE_BASE_URL, CRON_SECRET, FRONTEND_URL` (+ optional
+  timeouts/concurrency). **Redeploy after switching runtime**, then Scrape Now
+  should succeed instead of `BROWSER_NOT_INSTALLED`.
+- Allocate at least 1 GB RAM if the plan allows; Chromium is the heaviest part.
 
 ### Vercel (frontend)
 - Root: `client/`, build `npm run build`, output `dist`.
