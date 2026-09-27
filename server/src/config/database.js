@@ -401,7 +401,15 @@ async function getDb() {
   const { env } = require('./env');
   if (env.DATABASE_URL) {
     const { Pool } = require('pg');
-    const pool = new Pool({ connectionString: env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+    // Timeouts are critical for unattended runs: without connectionTimeoutMillis
+    // a blackholed TCP connect hangs FOREVER (default 0 = no timeout),
+    // freezing cron jobs with zero log output. Fail fast instead.
+    const pool = new Pool({
+      connectionString: env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+      connectionTimeoutMillis: 15000,
+      statement_timeout: 120000,
+    });
     db = createPgDb(pool);
   } else {
     db = createMemoryDb();

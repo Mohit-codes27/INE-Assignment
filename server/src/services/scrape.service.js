@@ -48,11 +48,11 @@ async function runSingle(trackedId, db, { headed = false, io = {}, onProgress = 
   return { success: false, errorCode: result.errorCode, errorMessage: result.errorMessage, attempts: result.attempts.length };
 }
 
-async function runAll(db, { trigger = 'manual', onlyDue = true } = {}) {
+async function runAll(db, { trigger = 'manual', onlyDue = true, io = {}, onProgress = null } = {}) {
   const all = await db.listTracked();
   const due = all.filter((t) => t.active && (!onlyDue || isDue(t)));
   const results = await pool(due, env.SCRAPE_CONCURRENCY, (t) =>
-    runSingle(t.id, db).then((r) => ({ id: t.id, ...r })).catch((e) => ({ id: t.id, success: false, errorMessage: e.message })));
+    runSingle(t.id, db, { io, onProgress }).then((r) => ({ id: t.id, ...r })).catch((e) => ({ id: t.id, success: false, errorMessage: e.message })));
   const vals = results.map((r) => r.value || r);
   const successful = vals.filter((v) => v.success).length;
   return { processed: vals.length, successful, failed: vals.length - successful, results: vals };
