@@ -24,7 +24,7 @@ export default function AppRouter() {
           <Route path="/tracked/:id" element={<DetailsRoute />} />
         </Routes>
       </main>
-      <footer className="foot">Scrapes demo.inelabteamdev.com every 2h via cron-job.org · honest logs, no fake history</footer>
+      <footer className="foot">Scrapes demo.inelabteamdev.com every 2 hour · honest logs, no fake history</footer>
     </BrowserRouter>
   );
 }

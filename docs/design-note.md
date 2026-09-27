@@ -1,89 +1,79 @@
-# Design Note
+# Design Note — INE Product Price Tracker
 
-## Scraping reliability — HTTP-first metadata, Playwright for gated quotes
+## 1. How the scraping was made reliable
 
-The store is a React SPA: `GET /` returns an empty `<div id="root">`. No price
-exists in HTML, so Cheerio selectors can never work for price — we proved this
-with `probeProductPageHtml` instead of assuming it. To be precise about the
-architecture: HTTP (axios) handles metadata acquisition — catalog
-(`/api/v2/listings`), item details (`/api/v2/items/:id`) and the UI manifest
-(`/api/v2/ui/manifest`): fast, cheap, no browser. But price/stock are gated
-behind hover-dwell tracking, a proof-of-work + WASM challenge and an encrypted
-quote response that only a real browser session can complete, so Playwright
-performs the actual price/stock extraction. We do NOT attempt HTTP price
-extraction first — the quote endpoint requires a live browser session, so that
-would fail by design. The honest description is "HTTP-first metadata +
-Playwright for browser-gated extraction", not "HTTP scraper with fallback".
+**Store reconnaissance came before selectors.** The mock store is a React SPA:
+`GET /` returns an empty `<div id="root">`, so no price ever exists in HTML
+(proven by an HTML probe, not assumed). Its JSON APIs give catalog
+(`/api/v2/listings`), item details with options (`/api/v2/items/:id`) and a
+layout manifest (`/api/v2/ui/manifest`) — but price/stock are gated behind
+hover-dwell tracking, consent dialogs, ~35% navigation flakiness, and a
+fingerprint + WASM-challenge quote flow that only a live browser can complete.
 
-Selectors: everything the manifest rotates (priceValue, mrp, sale, badge, …)
-is read via `buildSelectors(manifest)` at scrape time (`server/src/scraper/
-selectors.js`); stable app hooks (`.offer-panel`, `.opt-chip`, consent dialog)
-and button-text matching cover the rest. Each scrape also fingerprints the
-manifest into `structure_fingerprints`; a change emits STRUCTURE_CHANGED (and
-is covered by a service test) without ever failing the scrape — validation,
-not the fingerprint, decides success.
+**So the architecture is: HTTP-first metadata acquisition, Playwright for
+browser-gated extraction.** Axios fetches product/option existence and the
+manifest (cheap); a real Chromium session does consent dismissal, exact option
+selection, hover dwell, price unlock, and visible-price extraction. We deliberately
+do *not* attempt HTTP price extraction first — it would fail by design.
 
-## Retries — why 3 attempts with exponential backoff + jitter
+**Correctness guards at every layer:**
+- `buildSelectors(manifest)` — rotating classes come from the live manifest;
+  stable app hooks and button-text matching cover the rest. Nothing rotating
+  is hardcoded.
+- Exact option matching — the clicked chip's label must equal the tracked
+  option; never "first price on the page".
+- Strict parsing — no `price || 0`, no `stock || false`. Unknown stays unknown;
+  invisible split-span separators are defeated by keeping only digits/`.,`.
+- Validation before persistence — only validated successes create
+  `price_history`; every attempt (success/retried/failed, nullable price/stock)
+  is logged to `scrape_attempts`.
+- Retry (max 3, exponential backoff + jitter) with error classification —
+  timeouts/5xx/parse-misses retry; bad config/404/option-mismatch fail fast.
+- Atomic persistence — attempts + history + touch + events + fingerprint commit
+  in one transaction, never partial.
+- Scheduling — external clock (GitHub Actions every 2h), advisory-lock overlap
+  guard, per-product due-checks. No `setInterval` (dies on sleep).
+- Change detection — manifest fingerprints persisted per product; a change
+  emits `STRUCTURE_CHANGED` without failing the scrape.
 
-The store drops ~35% of navigations client-side and the price endpoint needs up
-to 6 internal retries itself. One attempt would flake constantly; unbounded
-retries would hang cron runs. 3 attempts (1s → 2s + jitter) absorbs transient
-flakes while bounding a single product to ~1 minute. Errors are classified:
-timeouts/5xx/parse-misses retry; bad config/404/option-mismatch fail fast.
+## 2. Trade-offs
 
-## Validation — keeping garbage out of history
+- **Fresh browser per scrape (~1–2 min/product) vs persistent browser.**
+  Chose slow + leak-proof (`finally` close) over fast + orphaned-process risk.
+- **Concurrency 2** — polite to the mock store and bounded on RAM, instead of
+  fast unbounded parallelism.
+- **GitHub Actions over cron-job.org / in-process timers.** cron-job.org's 30s
+  capture budget and opaque fetch errors made sync summaries unworkable, so the
+  endpoint acks immediately and scrapes in the background (audit via
+  `scrape_runs`). In-process timers die with sleeping hosts.
+- **Raw SQL over an ORM.** Small model, explicit queries and schema — defensible
+  and interview-explainable.
 
-`parser.js` is pure and strict: `parsePrice` rejects null/NaN/zero-as-failure
-(the store never legitimately sells at ₹0); `parseStock` only accepts known
-templates ("N units available", "Sold out", …) and returns UNKNOWN otherwise —
-never `false`-by-default. `validateScraped` re-checks id/name/option/price/stock
-after extraction. Only then does `scrape.service.js` insert `price_history`.
+## 3. What the AI tools got wrong on the first attempt, and how it was corrected
 
-## Honest logging — attempts vs history
-
-`scrape_attempts` gets one row per attempt (`success|retried|failed`, nullable
-price/stock); `price_history` gets a row only for validated success. A 3-attempt
-run with 2 flakes shows 3 log rows and 1 history point — charts stay truthful
-and interviewers can see the flakes.
-
-## Scheduling — why cron-job.org, not setInterval
-
-Render free tier sleeps; an in-process timer dies with the dyno and can double-
-fire across instances. An external cron POSTing to a secret-protected endpoint
-survives sleep. Overlap is guarded by a Postgres advisory lock
-(`pg_try_advisory_lock`) held on one dedicated connection for the whole run:
-a second concurrent cron gets `locked=false` immediately and returns "skipped".
-Note an earlier design used a single `INSERT ... SELECT WHERE NOT EXISTS`
-statement — that is NOT sufficient, because under MVCC two concurrent
-transactions can both snapshot "no open run" and both insert. `scrape_runs`
-rows remain as audit history, not as the lock. Production refuses to boot
-without a long CRON_SECRET (fail-fast instead of fail-open). Per-product
-`scrape_interval_minutes` (default 120) lets one 2-hour cron serve products
-with different frequencies via due-checks.
-
-## Persistence — one transaction per finished scrape
-
-`db.saveScrapeOutcome()` writes attempts + optional history + tracking touch +
-events + structure fingerprint in a single Postgres transaction (single
-synchronous block in the in-memory backend): all commit together or all roll
-back. A crash between "history inserted" and "attempts inserted" — or a
-fingerprint advancing while its scrape's history is lost — can never leave
-half a scrape behind.
-
-## Trade-offs
-
-- HTTP is 100x cheaper than Chromium but blind to gated content — hence the split.
-- Playwright per-scrape launch is slow (~5–15s) but leak-proof (`finally` close);
-  a persistent browser would be faster but risks orphaned processes on Render.
-- Concurrency 2: polite to the mock store, bounded memory, still parallel.
-- In-memory DB fallback: zero-setup local dev; real history needs Postgres.
-- Plain JS (not TS): chosen per request; Zod still validates API input at runtime.
-
-## AI usage
-
-- AI did: repo scaffold, boilerplate, and first-pass parsing of the store's
-  obfuscated bundle (endpoints, gating logic, format rotation).
-- Human must still: run headed scrape, verify selectors against live layout
-  `revision`, accumulate 2–3 tracked products of real cron history before
-  submission, and record the demo. Anything in `selectors.js` that drifts from
-  the live site should be corrected there — it is the single source of truth.
+1. **"Single-statement INSERT…WHERE NOT EXISTS is atomic."** Wrong: under MVCC
+   two concurrent transactions can both snapshot "no open run" and both insert.
+   Replaced with a properly held Postgres advisory lock (dedicated connection,
+   unlock in `finally`), plus a test proving overlap is refused.
+2. **README claimed STRUCTURE_CHANGED events that didn't exist.** The code
+   fingerprinted the manifest but never compared, persisted, or emitted.
+   Implemented properly (per-product stored fingerprint → compare → event) with
+   a service test; the fingerprint write was then moved *inside* the persistence
+   transaction after review caught it sitting outside.
+3. **Price extractor returned one digit — twice.** First the "biggest font"
+   heuristic picked the last character of split-span prices; then the parser's
+   allow-listed invisible separators let an unknown joiner through, yielding
+   the first digit. Fixed with manifest-driven node selection + keep-only-digits
+   parsing, each confirmed by failing-then-passing tests.
+4. **"HTTP scraper with Playwright fallback."** Inaccurate marketing of our own
+   design — corrected everywhere to "HTTP-first metadata + Playwright for
+   browser-gated extraction."
+5. **Tests hit the real Supabase** once `DATABASE_URL` was set locally.
+   Forced in-memory isolation (`DATABASE_URL=''`) at the top of service tests.
+6. **pg pool had no connection timeout** — a blackholed connect hangs forever
+   with zero logs, exactly what a 15-minute "stuck" Actions run turned out to
+   be adjacent to. Added connection + statement timeouts and timestamped stage
+   logging so the next stall names its own location.
+7. **Cron returned the full summary synchronously** — unworkable under a 30s
+   scheduler budget. Split into immediate ack + background run, with
+   `GET /api/cron/runs` as the audit trail.
