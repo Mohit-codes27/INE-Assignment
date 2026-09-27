@@ -1,0 +1,33 @@
+# Scheduled price scraping (replaces cron-job.org).
+# Runs the SAME production scrape path (server/src/cron-run.js) on GitHub's
+# infrastructure every 2 hours: full browsers install cleanly, 7GB RAM (no
+# OOM risk like Render free), no 30s response cap, full logs per run.
+# Overlap-safe twice over: workflow `concurrency` serializes scheduled runs,
+# and the Postgres advisory lock skips if any other runner is mid-scrape.
+name: scheduled-scrape
+on:
+  schedule:
+    - cron: '0 */2 * * *' # every 2 hours UTC
+  workflow_dispatch: {} # manual "Run workflow" button for testing
+concurrency:
+  group: price-scrape
+  cancel-in-progress: false
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: node src/cron-run.js
+        env:
+          NODE_ENV: production
+          DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+          STORE_BASE_URL: https://demo.inelabteamdev.com

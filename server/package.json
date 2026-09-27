@@ -11,7 +11,8 @@
     "build": "echo \"no build step (plain JS)\"",
     "lint": "node --check src/index.js && echo lint-ok",
     "test": "node --test tests/scraper.test.js tests/service.test.js",
-    "scrape:headed": "node src/headed.js"
+    "scrape:headed": "node src/headed.js",
+    "scrape:cron": "node src/cron-run.js"
   },
   "dependencies": {
     "axios": "^1.7.7",

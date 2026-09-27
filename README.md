@@ -135,8 +135,18 @@ Errors: `{ success: false, error: { code, message } }` (no stack traces in prod)
 - Root: `client/`, build `npm run build`, output `dist`.
 - Env: `VITE_API_BASE_URL=https://<render-backend>/api`.
 
-### cron-job.org
+### Scheduler — GitHub Actions (recommended)
+- Workflow `.github/workflows/scheduled-scrape.yml` runs `server/src/cron-run.js`
+  every 2 hours on `ubuntu-latest`: same production path (due-check, pool of 2,
+  attempts/history/events, advisory lock), full browser + RAM, full logs.
+- Setup: GitHub repo → Settings → Secrets → Actions → add `SUPABASE_DB_URL`
+  (Supabase connection string). Then Actions → scheduled-scrape → **Run workflow**
+  to test. Use only ONE scheduler (disable cron-job.org if you enable this).
+
+### Scheduler — cron-job.org (alternative)
 `POST https://<render-backend>/api/cron/scrape`, header `Authorization: Bearer <CRON_SECRET>`, every 2 hours.
+Endpoint acks immediately (`{acknowledged:true}`) and scrapes in background;
+verify via `GET /api/cron/runs` + Render logs, not the scheduler status line.
 
 ## Testing
 
