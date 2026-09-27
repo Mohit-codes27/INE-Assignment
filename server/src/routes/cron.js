@@ -24,12 +24,7 @@ router.post('/cron/scrape', cronAuth, async (req, res, next) => {
     const db = await getDb();
     const gate = await db.withCronLock(async () => {
       const run = await db.tryStartRun('cron');
-      ok(res, {
-        acknowledged: true,
-        runId: run ? run.id : null,
-        status: 'running',
-        note: 'Scrape continues in background; outcome in scrape_runs + server logs.',
-      });
+      ok(res, { acknowledged: true, runId: run ? run.id : null, status: 'running' });
       try {
         const summary = await scrapeService.runAll(db, { trigger: 'cron', onlyDue: true });
         if (run) await db.finishRun(run.id, 'completed').catch(() => {});
